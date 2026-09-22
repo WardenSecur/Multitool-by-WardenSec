@@ -42,23 +42,23 @@ while True:
     print(Fore.RED + "Выйти: /exit")
     chose = input()
     if chose == "1":
-        subprocess.run(["python", "maigrot.py"])
+        subprocess.run(["python", "modules/maigrot.py"])
     if chose == "2":
-        subprocess.run(["python", "basesec.py"])
+        subprocess.run(["python", "modules/basesec.py"])
     if chose == "3":
-        subprocess.run(["python", "dorks.py"])
+        subprocess.run(["python", "modules/dorks.py"])
     if chose == "4":
-        subprocess.run(["python", "phonelookup.py"])
+        subprocess.run(["python", "modules/phonelookup.py"])
     if chose == "5":
         print("Ну сказано же что не работает.")
     if chose == "6":
-        subprocess.run(["python", "portscan.py"])
+        subprocess.run(["python", "modules/portscan.py"])
     if chose == "7":
-        subprocess.run(["python", "arpscan.py"])
+        subprocess.run(["python", "modules/arpscan.py"])
     if chose == "8":
-        subprocess.run(["python", "hashid.py"])
+        subprocess.run(["python", "modules/hashid.py"])
     if chose == "9":
-        subprocess.run(["python", "endecoder.py"])
+        subprocess.run(["python", "modules/endecoder.py"])
     if chose == "/exit":
         break
 
