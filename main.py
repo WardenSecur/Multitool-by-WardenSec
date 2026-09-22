@@ -6,9 +6,9 @@ import random
 import time
 import sys
 import readline
+import os
 
-
-
+os.system("cls" if os.name == "nt" else "clear")
 def hacker_print(text, scramble_duration=0.1, tick=0.005):
     chars = "!@#$%^&*()_+-=[]{}|;:,.<>?/~`0123456789abcdefghijklmnopqrstuvwxyz"
 
