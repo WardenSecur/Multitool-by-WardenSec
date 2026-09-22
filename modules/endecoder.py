@@ -4,7 +4,10 @@ import urllib.parse
 import html
 import sys
 import json
+import hashlib
+import os
 import readline
+
 
 try:
     from colorama import init, Fore
@@ -12,21 +15,19 @@ try:
 except ImportError:
     Fore = None
 
-
-def try_decode(name, func, data):
-    try:
-        result = func(data)
-        if isinstance(result, bytes):
-            result = result.decode("utf-8", errors="replace")
-        return (name, str(result))
-    except Exception:
-        return None
+# AES через cryptography, если установлен
+try:
+    from cryptography.fernet import Fernet, InvalidToken
+    HAS_AES = True
+except ImportError:
+    HAS_AES = False
 
 
-def encode_all(text):
-    results = {}
+# ------------------ БЕЗ КЛЮЧА ------------------
+
+def encode_no_key(text):
     raw = text.encode("utf-8")
-
+    results = {}
     results["Base64"] = base64.b64encode(raw).decode()
     results["Base64 URL-safe"] = base64.urlsafe_b64encode(raw).decode()
     results["Base32"] = base64.b32encode(raw).decode()
@@ -46,7 +47,7 @@ def encode_all(text):
     return results
 
 
-def decode_all(text):
+def decode_no_key(text):
     results = {}
     t = text.strip()
 
@@ -66,43 +67,242 @@ def decode_all(text):
     ]
 
     for name, func in decoders:
-        r = try_decode(name, func, t)
-        if r:
-            results[r[0]] = r[1]
+        try:
+            r = func(t)
+            if isinstance(r, bytes):
+                r = r.decode("utf-8", errors="replace")
+            results[name] = str(r)
+        except Exception:
+            pass
 
-    # бинарный ввод
     if all(c in "01 " for c in t):
         try:
             bits = t.replace(" ", "")
             if len(bits) % 8 == 0:
-                decoded = "".join(chr(int(bits[i:i+8], 2)) for i in range(0, len(bits), 8))
-                results["Binary"] = decoded
+                results["Binary"] = "".join(chr(int(bits[i:i+8], 2)) for i in range(0, len(bits), 8))
         except Exception:
             pass
 
-    # восьмеричный
     if all(c in "01234567 " for c in t):
         try:
-            parts = t.split()
-            decoded = "".join(chr(int(p, 8)) for p in parts)
-            results["Octal"] = decoded
+            results["Octal"] = "".join(chr(int(p, 8)) for p in t.split())
         except Exception:
             pass
 
-    # десятичный
     if all(c.isdigit() or c == " " for c in t):
         try:
             parts = t.split()
             if all(0 <= int(p) <= 255 for p in parts):
-                decoded = "".join(chr(int(p)) for p in parts)
-                results["Decimal"] = decoded
+                results["Decimal"] = "".join(chr(int(p)) for p in parts)
         except Exception:
             pass
 
-    # реверс
     results["Reverse"] = t[::-1]
     return results
 
+
+# ------------------ С КЛЮЧОМ ------------------
+
+def xor_crypt(data, key):
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    if isinstance(key, str):
+        key = key.encode("utf-8")
+    return bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
+
+
+def vigenere_encrypt(text, key):
+    result = []
+    key = key.lower()
+    ki = 0
+    for ch in text:
+        if ch.isalpha():
+            base = ord('A') if ch.isupper() else ord('a')
+            shift = ord(key[ki % len(key)]) - ord('a')
+            result.append(chr((ord(ch) - base + shift) % 26 + base))
+            ki += 1
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
+def vigenere_decrypt(text, key):
+    result = []
+    key = key.lower()
+    ki = 0
+    for ch in text:
+        if ch.isalpha():
+            base = ord('A') if ch.isupper() else ord('a')
+            shift = ord(key[ki % len(key)]) - ord('a')
+            result.append(chr((ord(ch) - base - shift) % 26 + base))
+            ki += 1
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
+def caesar_encrypt(text, shift):
+    result = []
+    for ch in text:
+        if ch.isalpha():
+            base = ord('A') if ch.isupper() else ord('a')
+            result.append(chr((ord(ch) - base + shift) % 26 + base))
+        else:
+            result.append(ch)
+    return "".join(result)
+
+
+def caesar_decrypt(text, shift):
+    return caesar_encrypt(text, -shift)
+
+
+def aes_key_from_password(password):
+    # Fernet требует 32-байтный ключ в base64
+    digest = hashlib.sha256(password.encode()).digest()
+    return base64.urlsafe_b64encode(digest)
+
+
+def aes_encrypt(text, password):
+    if not HAS_AES:
+        return None
+    key = aes_key_from_password(password)
+    f = Fernet(key)
+    return f.encrypt(text.encode()).decode()
+
+
+def aes_decrypt(text, password):
+    if not HAS_AES:
+        return None
+    key = aes_key_from_password(password)
+    f = Fernet(key)
+    try:
+        return f.decrypt(text.encode()).decode()
+    except InvalidToken:
+        return None
+    except Exception:
+        return None
+
+
+def encode_with_key(text):
+    key = input("Введи ключ/пароль: ").strip()
+    if not key:
+        print("[-] Ключ пустой.")
+        return
+
+    results = {}
+
+    # XOR — вывод в hex и base64
+    x = xor_crypt(text, key)
+    results["XOR (hex)"] = x.hex()
+    results["XOR (base64)"] = base64.b64encode(x).decode()
+
+    # Vigenère — только для букв
+    if text.replace(" ", "").isalpha():
+        results["Vigenère"] = vigenere_encrypt(text, key)
+    else:
+        results["Vigenère"] = "только буквы"
+
+    # Caesar — сдвиг из ключа (сумма символов mod 26)
+    shift = sum(ord(c) for c in key) % 26
+    results["Caesar (shift=" + str(shift) + ")"] = caesar_encrypt(text, shift)
+
+    # AES (Fernet)
+    if HAS_AES:
+        aes = aes_encrypt(text, key)
+        if aes:
+            results["AES (Fernet)"] = aes
+    else:
+        results["AES (Fernet)"] = "pip install cryptography"
+
+    print_block("ENCODE (с ключом)", results)
+
+
+def decode_with_key(text):
+    print("\n[*] Автоопределение метода...")
+    candidates = []
+
+    # Проверяем, что похоже на hex
+    try:
+        binascii.unhexlify(text.replace(" ", ""))
+        candidates.append("XOR (hex)")
+    except Exception:
+        pass
+
+    # Проверяем на base64
+    try:
+        base64.b64decode(text + "=" * (-len(text) % 4))
+        candidates.append("XOR (base64)")
+    except Exception:
+        pass
+
+    # AES Fernet всегда начинается с gAAAAA
+    if text.startswith("gAAAAA"):
+        candidates.append("AES (Fernet)")
+
+    # Vigenère — только буквы
+    if text.replace(" ", "").isalpha():
+        candidates.append("Vigenère")
+
+    # Caesar — тоже только буквы
+    if text.replace(" ", "").isalpha():
+        candidates.append("Caesar")
+
+    if not candidates:
+        print("[-] Метод с ключом не определён.")
+        return
+
+    print(f"[*] Возможные методы: {', '.join(candidates)}")
+    print("(Попробуй все из списка)")
+    print("Выбери метод:")
+    for i, c in enumerate(candidates, 1):
+        print(f"  {i}. {c}")
+    choice = input("Номер: ").strip()
+    if not choice.isdigit() or not (1 <= int(choice) <= len(candidates)):
+        print("[-] Неверный выбор.")
+        return
+
+    method = candidates[int(choice) - 1]
+    key = input("Введи ключ/пароль: ").strip()
+    if not key:
+        print("[-] Ключ пустой.")
+        return
+
+    result = None
+
+    if method == "XOR (hex)":
+        try:
+            data = bytes.fromhex(text.replace(" ", ""))
+            result = xor_crypt(data, key).decode("utf-8", errors="replace")
+        except Exception as e:
+            print(f"[-] Ошибка: {e}")
+            return
+    elif method == "XOR (base64)":
+        try:
+            data = base64.b64decode(text + "=" * (-len(text) % 4))
+            result = xor_crypt(data, key).decode("utf-8", errors="replace")
+        except Exception as e:
+            print(f"[-] Ошибка: {e}")
+            return
+    elif method == "AES (Fernet)":
+        result = aes_decrypt(text, key)
+        if result is None:
+            print("[-] Не удалось расшифровать. Неверный ключ или повреждённые данные.")
+            return
+    elif method == "Vigenère":
+        result = vigenere_decrypt(text, key)
+    elif method == "Caesar":
+        shift = sum(ord(c) for c in key) % 26
+        result = caesar_decrypt(text, shift)
+
+    if result is not None:
+        print(f"\n[+] Результат ({method}):")
+        if Fore:
+            print(Fore.GREEN + result)
+        else:
+            print(result)
+
+
+# ------------------ ОБЩЕЕ ------------------
 
 def print_block(title, items):
     print(f"\n=== {title} ===")
@@ -115,25 +315,50 @@ def print_block(title, items):
 
 
 def main():
-    print("=== ENCODER / DECODER ===")
-    print("Шифрует/дешифрует текст популярными методами")
+    print("=== ENCODER / DECODER v2 ===")
     print("  1. Закодировать")
-    print("  2. Декодировать (автоопределение)")
+    print("  2. Расшифровать (автоопределение)")
     print("  3. Оба сразу")
     choice = input("Выбор (1/2/3): ").strip()
 
-    text = input("Введи строку: ").strip()
-    if not text:
-        print("[-] Пусто.")
-        return
-
     if choice == "1":
-        print_block("ENCODE", encode_all(text))
+        text = input("Введи строку: ").strip()
+        if not text:
+            print("[-] Пусто.")
+            return
+        print_block("ENCODE (без ключа)", encode_no_key(text))
+        print()
+        print("[*] Теперь шифры с ключом.")
+        encode_with_key(text)
+
     elif choice == "2":
-        print_block("DECODE", decode_all(text))
+        text = input("Введи закодированный текст: ").strip()
+        if not text:
+            print("[-] Пусто.")
+            return
+        # Сначала пробуем без ключа
+        no_key = decode_no_key(text)
+        if no_key:
+            print_block("DECODE (без ключа)", no_key)
+        # Потом с ключом
+        print()
+        print("[*] Проверка методов с ключом.")
+        decode_with_key(text)
+
     elif choice == "3":
-        print_block("ENCODE", encode_all(text))
-        print_block("DECODE", decode_all(text))
+        text = input("Введи строку: ").strip()
+        if not text:
+            print("[-] Пусто.")
+            return
+        print_block("ENCODE (без ключа)", encode_no_key(text))
+        print()
+        encode_with_key(text)
+        print()
+        no_key = decode_no_key(text)
+        if no_key:
+            print_block("DECODE (без ключа)", no_key)
+        decode_with_key(text)
+
     else:
         print("[-] Неверный выбор.")
 
